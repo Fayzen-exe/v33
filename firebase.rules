@@ -1,0 +1,88 @@
+// ============================================================
+//  KITCHEN DIARIES — FIREBASE SECURITY RULES
+//  Paste this into: Firebase Console → Firestore → Rules tab
+// ============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper functions ──────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return request.auth.uid == uid;
+    }
+
+    function isValidComment() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'displayName', 'text', 'stars', 'createdAt'])
+          && data.uid    is string  && data.uid.size() > 0
+          && data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 60
+          && data.text   is string  && data.text.size() > 0  && data.text.size() <= 1000
+          && data.stars  is int     && data.stars >= 1 && data.stars <= 5;
+    }
+
+    function isValidRating() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'displayName', 'stars', 'updatedAt'])
+          && data.uid    is string && data.uid.size() > 0
+          && data.stars  is int    && data.stars >= 1 && data.stars <= 5;
+    }
+
+    // ── User profiles ─────────────────────────────────────
+    // Users can read any profile; can only write their own.
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if isSignedIn() && isOwner(userId);
+      allow update: if isSignedIn() && isOwner(userId);
+      allow delete: if false;
+    }
+
+    // ── Recipe comments (one collection per recipe) ───────
+    // Pattern:  comments_{recipeId}
+    // Anyone can read comments; only authenticated users can post.
+    // Users can delete only their own comments.
+    match /comments_{recipeId}/{commentId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+                    && isOwner(request.resource.data.uid)
+                    && isValidComment();
+      allow update: if false;   // Comments are immutable once posted
+      allow delete: if isSignedIn() && isOwner(resource.data.uid);
+    }
+
+    // ── Recipe ratings (one collection per recipe) ────────
+    // Pattern:  ratings_{recipeId}
+    // Document ID = user's UID (one rating per user per recipe).
+    // Anyone can read ratings; authenticated users can set/update their own.
+    match /ratings_{recipeId}/{userId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+                    && isOwner(userId)
+                    && isValidRating();
+      allow update: if isSignedIn()
+                    && isOwner(userId)
+                    && isValidRating();
+      allow delete: if isSignedIn() && isOwner(userId);
+    }
+
+    // ── Contact messages ──────────────────────────────────
+    // Anyone (even guests) can submit a contact message.
+    // No one can read, update, or delete contact messages from the client.
+    match /contact_messages/{msgId} {
+      allow create: if request.resource.data.keys().hasAll(['name','email','message','createdAt'])
+                    && request.resource.data.name    is string && request.resource.data.name.size() > 0
+                    && request.resource.data.email   is string && request.resource.data.email.size() > 0
+                    && request.resource.data.message is string && request.resource.data.message.size() > 0;
+      allow read, update, delete: if false;
+    }
+
+    // ── Catch-all: deny everything else ──────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
